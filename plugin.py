@@ -33,18 +33,22 @@ logger = logging.getLogger("Unmanic.Plugin.remove_stream_by_language")
 
 class Settings(PluginSettings):
     settings = {
-        "languages": '',
-        "advanced":              False,
-        "main_options":          '',
-        "advanced_options":      ''
+        "audio_languages":      '',
+        "subtitle_languages":   '',
+        "advanced":             False,
+        "main_options":         '',
+        "advanced_options":     ''
     }
 
 
     def __init__(self, *args, **kwargs):
         super(Settings, self).__init__(*args, **kwargs)
         self.form_settings = {
-            "languages": {
-                "label": "Languages to remove",
+            "audio_languages": {
+                "label": "Audio stream languages to remove",
+            },
+            "subtitle_languages": {
+                "label": "Subtitle languages to remove",
             },
             "advanced": {
                 "label": "Write your own FFmpeg params",
@@ -79,10 +83,14 @@ class PluginStreamMapper(StreamMapper):
     def set_settings(self, settings):
         self.settings = settings
 
-    def test_tags_for_search_string(self, stream_tags, stream_id):
+    def test_tags_for_search_string(self, codec_type, stream_tags, stream_id):
         # TODO: Check if we need to add 'title' tags
         if stream_tags and True in list(k.lower() in ['language'] for k in stream_tags):
-            language_list = self.settings.get_setting('languages')
+            # check codec and get appropriate language list
+            if codec_type == 'audio':
+                language_list = self.settings.get_setting('audio_languages')
+            else:
+                language_list = self.settings.get_setting('subtitle_languages')
             languages = list(filter(None, language_list.split(',')))
             for language in languages:
                 language = language.strip()
@@ -96,7 +104,7 @@ class PluginStreamMapper(StreamMapper):
 
     def test_stream_needs_processing(self, stream_info: dict):
         """Only add streams that have language task that match our list"""
-        return self.test_tags_for_search_string(stream_info.get('tags'), stream_info.get('index'))
+        return self.test_tags_for_search_string(stream_info.get('codec_type', '').lower(), stream_info.get('tags'), stream_info.get('index'))
 
     def custom_stream_mapping(self, stream_info: dict, stream_id: int):
         """Remove this stream"""
@@ -126,8 +134,8 @@ def on_library_management_file_test(data):
         settings = Settings()
 
     # If the config is empty (not yet configured) ignore everything
-    if not settings.get_setting('languages'):
-        logger.debug("Plugin has not yet been configured with a list of file extensions to allow. Blocking everything.")
+    if not settings.get_setting('audio_languages') and not settings.get_setting('subtitle_languages'):
+        logger.debug("Plugin has not yet been configured with a list languages to remvoe allow. Blocking everything.")
         return False
 
     # Get the path to the file
@@ -167,6 +175,12 @@ def on_library_management_file_test(data):
 
     return data
 
+def remove_languages(mapper, codec_type, language_list):
+    languages = list(filter(None, language_list.split(',')))
+    for language in languages:
+        language = language.strip()
+        if language and language.lower() :
+            mapper.stream_mapping += ['-map', '-0:{}:m:language:{}'.format(codec_type, language)]
 
 def on_worker_process(data):
     """
@@ -182,7 +196,7 @@ def on_worker_process(data):
 
     :param data:
     :return:
-    
+
     """
     # Default to no FFMPEG command required. This prevents the FFMPEG command from running if it is not required
     data['exec_command'] = []
@@ -223,13 +237,8 @@ def on_worker_process(data):
         mapper.stream_mapping = ['-map', '0']
         mapper.stream_encoding = ['-c', 'copy']
         # set negative stream mappings to remove languages
-
-        language_list = settings.get_setting('languages')
-        languages = list(filter(None, language_list.split(',')))
-        for language in languages:
-            language = language.strip()
-            if language and language.lower() :
-                mapper.stream_mapping += ['-map', '-0:m:language:{}'.format(language)]
+        remove_languages(mapper, 'a', settings.get_setting('audio_languages'))
+        remove_languages(mapper, 's', settings.get_setting('subtitle_languages'))
 
         # Get generated ffmpeg args
         ffmpeg_args = mapper.get_ffmpeg_args()
